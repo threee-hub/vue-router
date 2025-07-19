@@ -1,6 +1,6 @@
 /*!
   * vue-router v3.6.5
-  * (c) 2022 Evan You
+  * (c) 2025 Evan You
   * @license MIT
   */
 /*  */
@@ -350,6 +350,9 @@ var View = {
     // cache component
     cache[name] = { component };
 
+    // attach the route record to the vnode data for use in hooks
+    data.routerViewMatched = matched;
+
     // attach instance registration hook
     // this will be called in the instance's injected lifecycle hooks
     data.registerRouteInstance = (vm, val) => {
@@ -365,8 +368,25 @@ var View = {
 
     // also register instance in prepatch hook
     // in case the same component instance is reused across different routes
-    ;(data.hook || (data.hook = {})).prepatch = (_, vnode) => {
-      matched.instances[name] = vnode.componentInstance;
+    ;(data.hook || (data.hook = {})).prepatch = (oldVnode, vnode) => {
+      const oldMatched = oldVnode.data.routerViewMatched;
+      const newMatched = vnode.data.routerViewMatched;
+      if (newMatched && oldMatched && newMatched.components[name] !== oldMatched.components[name]) {
+        // an upcoming patch will replace the component, leave it to the teardown logic
+        return
+      }
+      if (newMatched) {
+        // update the instance reference on the new matched record
+        newMatched.instances[name] = vnode.componentInstance;
+
+        // and clear the reference on the old record
+        if (oldMatched && oldMatched !== newMatched) {
+          oldMatched.instances[name] = undefined;
+        }
+      } else if (oldMatched) {
+        // clearing the instance reference
+        oldMatched.instances[name] = undefined;
+      }
     };
 
     // register instance in init hook
@@ -584,8 +604,9 @@ function parse (str, options) {
     var partial = prefix != null && next != null && next !== prefix;
     var repeat = modifier === '+' || modifier === '*';
     var optional = modifier === '?' || modifier === '*';
-    var delimiter = res[2] || defaultDelimiter;
+    var delimiter = prefix || defaultDelimiter;
     var pattern = capture || group;
+    var prevText = prefix || (typeof tokens[tokens.length - 1] === 'string' ? tokens[tokens.length - 1] : '');
 
     tokens.push({
       name: name || key++,
@@ -595,7 +616,7 @@ function parse (str, options) {
       repeat: repeat,
       partial: partial,
       asterisk: !!asterisk,
-      pattern: pattern ? escapeGroup(pattern) : (asterisk ? '.*' : '[^' + escapeString(delimiter) + ']+?')
+      pattern: pattern ? escapeGroup(pattern) : (asterisk ? '.*' : restrictBacktrack(delimiter, prevText))
     });
   }
 
@@ -610,6 +631,14 @@ function parse (str, options) {
   }
 
   return tokens
+}
+
+function restrictBacktrack(delimiter, prevText) {
+  if (!prevText || prevText.indexOf(delimiter) > -1) {
+    return '[^' + escapeString(delimiter) + ']+?'
+  }
+
+  return escapeString(prevText) + '|(?:(?!' + escapeString(prevText) + ')[^' + escapeString(delimiter) + '])+?'
 }
 
 /**
